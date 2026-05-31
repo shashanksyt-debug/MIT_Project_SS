@@ -25,6 +25,10 @@ class _HomeScreenState extends State<HomeScreen> {
   double _thresholdCm = AppConstants.defaultWarningThresholdCm;
   final _timeFmt = DateFormat('HH:mm:ss');
 
+  //Added These
+  BtConnectionState _previousBtState = BtConnectionState.idle;
+  bool _hasSpokenConnected = false;
+
   @override
   void initState() {
     super.initState();
@@ -37,10 +41,22 @@ class _HomeScreenState extends State<HomeScreen> {
   void _onBtStateChange() {
     final bt = context.read<BluetoothService>();
     final tts = context.read<TtsService>();
-    if (bt.connectionState == BtConnectionState.connected) {
+    final newState = bt.connectionState;
+
+    // Only act when the state actually CHANGES
+    if (newState == _previousBtState) return;
+    _previousBtState = newState;
+
+    if (newState == BtConnectionState.connected && !_hasSpokenConnected) {
+      _hasSpokenConnected = true;
       tts.speakEvent('Connected to ${bt.connectedDevice?.name ?? "device"}.');
-    } else if (bt.connectionState == BtConnectionState.disconnected) {
+    } else if (newState == BtConnectionState.disconnected) {
+      _hasSpokenConnected =
+          false; // reset so it speaks again on next connection
       tts.speakEvent('Bluetooth disconnected.');
+    } else if (newState == BtConnectionState.error) {
+      _hasSpokenConnected = false;
+      tts.speakEvent('Connection error.');
     }
   }
 
