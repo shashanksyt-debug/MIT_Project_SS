@@ -1,11 +1,4 @@
 // lib/services/tts_service.dart
-//
-// Wraps flutter_tts to speak distance readings aloud.
-// Features:
-//   • Configurable announcement interval (default: every 3 seconds)
-//   • Immediate alert when distance crosses the warning threshold
-//   • Debounce: won't interrupt a sentence already in progress
-//   • Toggle on/off at runtime
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -13,19 +6,18 @@ import 'package:flutter_tts/flutter_tts.dart';
 class TtsService extends ChangeNotifier {
   final FlutterTts _tts = FlutterTts();
 
-  // ── Settings (all adjustable at runtime) ─────────────────────
-  bool   isTtsEnabled       = true;
-  bool   announceWarnings   = true;  // speak immediately when threshold crossed
-  double speechRate         = 0.5;   // 0.0–1.0
-  double volume             = 1.0;   // 0.0–1.0
-  double pitch              = 1.0;   // 0.5–2.0
+  // ── Settings ──────────────────────────────────────────────────
+  bool isTtsEnabled = true;
+  double speechRate = 0.5;
+  double volume = 1.0;
+  double pitch = 1.0;
   Duration announceInterval = const Duration(seconds: 3);
 
-  // ── State ─────────────────────────────────────────────────────
-  bool      _isSpeaking   = false;
-  bool      _wasInWarning = false;  // tracks threshold crossing
-  DateTime? _lastAnnounce;
-  DateTime? _lastEventSpoken;       // debounce for connection events
+  // ── Internal state ────────────────────────────────────────────
+  bool _isSpeaking = false;
+  bool _wasInWarning = false; // true while object is within threshold
+  DateTime? _lastAnnounce; // last time a warning was spoken
+  DateTime? _lastEventSpoken; // debounce for connection events
 
   TtsService() {
     _init();
@@ -36,69 +28,69 @@ class TtsService extends ChangeNotifier {
     await _tts.setSpeechRate(speechRate);
     await _tts.setVolume(volume);
     await _tts.setPitch(pitch);
-
-    _tts.setStartHandler(()  { _isSpeaking = true;  });
-    _tts.setCompletionHandler(() { _isSpeaking = false; });
-    _tts.setErrorHandler((_) { _isSpeaking = false; });
+    _tts.setStartHandler(() => _isSpeaking = true);
+    _tts.setCompletionHandler(() => _isSpeaking = false);
+    _tts.setErrorHandler((_) => _isSpeaking = false);
   }
 
   // ── Called on every new Bluetooth distance reading ────────────
   //
-  // [distanceCm]  – measured value (null = sensor error)
-  // [thresholdCm] – user-configured warning threshold
+  // Behaviour:
+  //   • Silent when distance >= threshold (safe zone)
+  //   • Speaks ONCE the moment object enters danger zone
+  //   • Repeats every announceInterval while object stays close
+  //   • Resets when object moves away — warns again on next approach
+  //   • Never speaks "Sensor error" — silently ignores null readings
   Future<void> onNewReading(double? distanceCm, double thresholdCm) async {
     if (!isTtsEnabled) return;
 
-    // ── Sensor error ──────────────────────────────────────────
+    // ── Ignore sensor errors silently ────────────────────────
     if (distanceCm == null) {
-      if (!_wasInWarning) {
-        await _speak('Sensor error');
-      }
-      _wasInWarning = false;  // FIX: reset so warnings fire again after error clears
+      // Only reset warning state so it can fire again when sensor recovers
+      _wasInWarning = false;
       return;
     }
 
     final inWarning = distanceCm < thresholdCm;
 
-    // ── Threshold crossing alert (immediate, highest priority) ──
-    // Only fires once per crossing — not on every packet while close
-    if (announceWarnings && inWarning && !_wasInWarning) {
+    // ── Object moved away → reset, stay silent ────────────────
+    if (!inWarning) {
+      _wasInWarning = false;
+      return; // silent in safe zone
+    }
+
+    // ── Object just entered danger zone → speak immediately ───
+    if (!_wasInWarning) {
       _wasInWarning = true;
-      _lastAnnounce = DateTime.now();  // FIX: prevent immediate periodic follow-up
+      _lastAnnounce = DateTime.now();
       await _speak(
-        'Warning! Object at ${distanceCm.toStringAsFixed(0)} centimetres.',
+        'Warning! Obstacle at ${distanceCm.toStringAsFixed(0)} centimetres.',
         force: true,
       );
       return;
     }
 
-    // Reset warning flag once object moves away
-    if (!inWarning) _wasInWarning = false;
-
-    // ── Periodic announcement (every announceInterval) ────────
+    // ── Object still in danger zone → repeat every interval ───
     final now = DateTime.now();
-    final shouldAnnounce = _lastAnnounce == null ||
+    final shouldRepeat = _lastAnnounce == null ||
         now.difference(_lastAnnounce!) >= announceInterval;
 
-    if (shouldAnnounce) {
+    if (shouldRepeat) {
       _lastAnnounce = now;
-      final text = inWarning
-          ? 'Distance: ${distanceCm.toStringAsFixed(0)} centimetres. Too close.'
-          : 'Distance: ${distanceCm.toStringAsFixed(0)} centimetres.';
-      await _speak(text);
+      await _speak(
+        'Obstacle still close. ${distanceCm.toStringAsFixed(0)} centimetres.',
+      );
     }
   }
 
-  // ── Speak a one-off connection event ─────────────────────────
-  // Debounced: ignores calls within 3 seconds of the last event.
-  // This prevents the "connected connected connected..." repeat bug.
+  // ── Speak a one-off connection/disconnection event ────────────
+  // Debounced to 3 seconds — prevents "connected connected..." bug
   Future<void> speakEvent(String message) async {
     if (!isTtsEnabled) return;
-
     final now = DateTime.now();
     if (_lastEventSpoken != null &&
         now.difference(_lastEventSpoken!) < const Duration(seconds: 3)) {
-      return;  // debounce — too soon after last event
+      return;
     }
     _lastEventSpoken = now;
     await _speak(message, force: true);
@@ -111,7 +103,7 @@ class TtsService extends ChangeNotifier {
     await _tts.speak(text);
   }
 
-  // ── Stop immediately ──────────────────────────────────────────
+  // ── Stop all speech immediately ───────────────────────────────
   Future<void> stop() async {
     await _tts.stop();
     _isSpeaking = false;
@@ -124,17 +116,28 @@ class TtsService extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── Apply updated settings ────────────────────────────────────
+  // ── Apply settings at runtime ─────────────────────────────────
   Future<void> applySettings({
-    double?   rate,
-    double?   vol,
-    double?   p,
+    double? rate,
+    double? vol,
+    double? p,
     Duration? interval,
   }) async {
-    if (rate     != null) { speechRate = rate; await _tts.setSpeechRate(rate); }
-    if (vol      != null) { volume     = vol;  await _tts.setVolume(vol);      }
-    if (p        != null) { pitch      = p;    await _tts.setPitch(p);         }
-    if (interval != null) { announceInterval = interval;                        }
+    if (rate != null) {
+      speechRate = rate;
+      await _tts.setSpeechRate(rate);
+    }
+    if (vol != null) {
+      volume = vol;
+      await _tts.setVolume(vol);
+    }
+    if (p != null) {
+      pitch = p;
+      await _tts.setPitch(p);
+    }
+    if (interval != null) {
+      announceInterval = interval;
+    }
     notifyListeners();
   }
 
