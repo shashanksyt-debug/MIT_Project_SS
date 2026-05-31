@@ -1,0 +1,32 @@
+name: bt_distance_meter
+description: Real-time distance meter via Bluetooth from Arduino HC-SR04.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Classic SPP (Serial Port Profile) Bluetooth — works with HC-05/HC-06
+  flutter_bluetooth_serial: ^0.4.0
+  flutter_tts: ^4.0.2 
+
+  # State management
+  provider: ^6.1.1
+
+  # Permission handling
+  permission_handler: ^11.3.0
+
+  # Formatting helpers
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

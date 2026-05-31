@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+    ╔══════════════════════════════════════════════════════════════╗
+    ║  Bluetooth Permissions                                       ║
+    ║  • Android 11 and below: BLUETOOTH + ACCESS_FINE_LOCATION   ║
+    ║  • Android 12+: BLUETOOTH_SCAN + BLUETOOTH_CONNECT          ║
+    ║    (location still recommended for reliable scanning)        ║
+    ╚══════════════════════════════════════════════════════════════╝
+    -->
+
+    <!-- Legacy Bluetooth (API ≤ 30) -->
+    <uses-permission android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+
+    <!-- Android 12+ Bluetooth (API ≥ 31) -->
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="s" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+
+    <!-- Location — required for Bluetooth scanning on Android ≤ 11 -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+
+    <!-- Internet (not strictly required but good practice) -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Declare Bluetooth hardware as optional so the app is visible
+         on devices without BT hardware (tablets, etc.) -->
+    <uses-feature android:name="android.hardware.bluetooth"
+        android:required="false" />
+
+    <application
+        android:label="BT Distance Meter"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+
+    <queries>
+        <intent>
+            <action android:name="android.bluetooth.IBluetooth.action.REQUEST_ENABLE"/>
+        </intent>
+    </queries>
+</manifest>
