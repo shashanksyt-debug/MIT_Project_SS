@@ -106,6 +106,11 @@ class BluetoothService extends ChangeNotifier {
       }
 
       final devices = await FlutterBluetoothSerial.instance.getBondedDevices();
+
+      for (final d in devices) {
+        debugPrint('DEVICE FOUND => ${d.name} | ${d.address}');
+      }
+
       pairedDevices = devices;
 
       _setState(BtConnectionState.idle);
@@ -141,6 +146,30 @@ class BluetoothService extends ChangeNotifier {
       _setError('Connection timed out. Is the HC-05 powered on?');
     } catch (e) {
       _setError('Connection failed: $e');
+    }
+  }
+
+  Future<void> connectToHc05Direct() async {
+    try {
+      _setState(BtConnectionState.connecting);
+
+      await disconnect(notify: false);
+
+      _connection = await BluetoothConnection.toAddress(
+        "00:25:02:01:21:06",
+      );
+
+      connectedDevice = BluetoothDevice(
+        address: "00:25:02:01:21:06",
+        name: "HC-05",
+        type: BluetoothDeviceType.classic,
+      );
+
+      _setState(BtConnectionState.connected);
+
+      _startListening();
+    } catch (e) {
+      _setError("Direct HC-05 connection failed: $e");
     }
   }
 
@@ -195,20 +224,20 @@ class BluetoothService extends ChangeNotifier {
   }
 
   void _processLine(String line) {
-  final reading = DistanceReading.fromPacket(line);
+    final reading = DistanceReading.fromPacket(line);
 
-  // Only update lastReading if it's a valid value
-  // If it's an error, keep the previous good reading but still emit
-  // the event so the timestamp updates
-  if (!reading.isError) {
-    lastReading = reading;
-  }
+    // Only update lastReading if it's a valid value
+    // If it's an error, keep the previous good reading but still emit
+    // the event so the timestamp updates
+    if (!reading.isError) {
+      lastReading = reading;
+    }
 
-  if (!_readingController.isClosed) {
-    _readingController.add(reading);
+    if (!_readingController.isClosed) {
+      _readingController.add(reading);
+    }
+    notifyListeners();
   }
-  notifyListeners();
-}
 
   void _onStreamError(Object error) {
     debugPrint('BT stream error: $error');

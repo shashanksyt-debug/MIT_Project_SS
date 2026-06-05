@@ -96,6 +96,16 @@ class TtsService extends ChangeNotifier {
     await _speak(message, force: true);
   }
 
+  // ── Speak detected object ──────────────────────────────
+  Future<void> speakObjectName(String objectName) async {
+    if (!isTtsEnabled) return;
+
+    await _speak(
+      'Detected $objectName',
+      force: true,
+    );
+  }
+
   // ── Core speak helper ─────────────────────────────────────────
   Future<void> _speak(String text, {bool force = false}) async {
     if (_isSpeaking && !force) return;

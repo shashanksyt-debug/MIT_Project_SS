@@ -13,6 +13,7 @@ import '../widgets/device_list_sheet.dart';
 import '../widgets/distance_gauge.dart';
 import '../widgets/status_bar.dart';
 import '../widgets/warning_banner.dart';
+import '../widgets/camera_detection_panel.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -290,6 +291,10 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                       const SizedBox(height: 32),
+
+                      const CameraDetectionPanel(),
+                      const SizedBox(height: 20),
+
                       _DataFlowChip(),
                       const SizedBox(height: 24),
                     ]),

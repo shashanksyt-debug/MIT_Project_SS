@@ -85,13 +85,15 @@ class DeviceListSheet extends StatelessWidget {
               ),
             )
           else
-            ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              itemCount: devices.length,
-              separatorBuilder: (_, __) =>
-                  const Divider(color: AppConstants.colorBorder, height: 1),
-              itemBuilder: (context, i) => _DeviceTile(device: devices[i]),
+            Flexible(
+              child: ListView.separated(
+                itemCount: devices.length,
+                separatorBuilder: (_, __) => const Divider(
+                  color: AppConstants.colorBorder,
+                  height: 1,
+                ),
+                itemBuilder: (context, i) => _DeviceTile(device: devices[i]),
+              ),
             ),
 
           const SizedBox(height: 24),
