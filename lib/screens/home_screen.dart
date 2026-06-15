@@ -9,7 +9,6 @@ import '../models/distance_reading.dart';
 import '../services/bluetooth_service.dart';
 import '../services/tts_service.dart';
 import '../utils/constants.dart';
-import '../widgets/device_list_sheet.dart';
 import '../widgets/distance_gauge.dart';
 import '../widgets/status_bar.dart';
 import '../widgets/warning_banner.dart';
@@ -85,18 +84,8 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!enabled) {
         await btService.enableBluetooth();
       }
-      await btService.loadPairedDevices();
-      if (!mounted) return;
-      _showDeviceSheet();
+      await btService.connectToHc05Direct();
     }
-  }
-
-  void _showDeviceSheet() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (_) => const DeviceListSheet(),
-    );
   }
 
   void _showThresholdDialog() {
@@ -141,6 +130,10 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: TextStyle(color: AppConstants.colorAccent)),
             onPressed: () {
               setState(() => _thresholdCm = temp);
+              // Announce threshold change via TTS
+              context.read<TtsService>().speakEvent(
+                    'Threshold set to ${temp.toStringAsFixed(0)} centimeters.',
+                  );
               Navigator.pop(ctx);
             },
           ),
@@ -154,7 +147,6 @@ class _HomeScreenState extends State<HomeScreen> {
     final btService = context.watch<BluetoothService>();
     final state = btService.connectionState;
     final isConn = state == BtConnectionState.connected;
-    final reading = btService.lastReading;
 
     return Scaffold(
       backgroundColor: AppConstants.colorBackground,
@@ -291,10 +283,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                       ),
                       const SizedBox(height: 32),
-
                       const CameraDetectionPanel(),
                       const SizedBox(height: 20),
-
                       _DataFlowChip(),
                       const SizedBox(height: 24),
                     ]),

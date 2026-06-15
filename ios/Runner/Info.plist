@@ -66,5 +66,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- Camera permission for object detection -->
+	<key>NSCameraUsageDescription</key>
+	<string>This app needs access to your camera to detect objects in real-time.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>This app uses location data for Bluetooth device discovery.</string>
 </dict>
 </plist>

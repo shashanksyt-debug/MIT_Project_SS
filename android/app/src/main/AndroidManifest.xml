@@ -32,15 +32,30 @@
     <!-- Internet (not strictly required but good practice) -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!--
+    ╔══════════════════════════════════════════════════════════════╗
+    ║  Camera Permissions                                          ║
+    ║  • Required for mobile device camera streaming               ║
+    ╚══════════════════════════════════════════════════════════════╝
+    -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    
+    <!-- Declare camera hardware as required for object detection -->
+    <uses-feature android:name="android.hardware.camera"
+        android:required="true" />
+    <uses-feature android:name="android.hardware.camera.autofocus"
+        android:required="false" />
+
     <!-- Declare Bluetooth hardware as optional so the app is visible
          on devices without BT hardware (tablets, etc.) -->
     <uses-feature android:name="android.hardware.bluetooth"
         android:required="false" />
 
     <application
-        android:label="BT Distance Meter"
-        android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+    android:label="BT Distance Meter"
+    android:name="${applicationName}"
+    android:icon="@mipmap/ic_launcher"
+    android:usesCleartextTraffic="true">
 
         <activity
             android:name=".MainActivity"
