@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
@@ -11,19 +12,14 @@ class TfliteDetectionService {
   late Interpreter _interpreter;
   List<String> _labels = [];
   bool _isInitialized = false;
-  double confidenceThreshold = 0.3;
-
-  // Non-maximum suppression IoU threshold
-  double iouThreshold = 0.5;
+  double confidenceThreshold = 0.25;
+  double iouThreshold = 0.45;
 
   Future<void> initialize() async {
     if (_isInitialized) return;
-
     try {
-      // Load interpreter from assets
       _interpreter = await Interpreter.fromAsset('assets/models/detect.tflite');
 
-      // Load labels
       final raw = await rootBundle.loadString('assets/models/labelmap.txt');
       _labels = raw
           .split('\n')
@@ -32,7 +28,7 @@ class TfliteDetectionService {
           .toList();
 
       _isInitialized = true;
-      print('TFLite model loaded (${_labels.length} labels)');
+      print('TFLite YOLO model loaded (${_labels.length} labels)');
     } catch (e) {
       print('TFLite initialization error: $e');
       rethrow;
@@ -45,15 +41,26 @@ class TfliteDetectionService {
     final bytes = await imageFile.readAsBytes();
     final image = img.decodeImage(bytes)!;
 
-    // Model input size for EfficientDet-Lite3
-    const inputSize = 384;
-    final resized = img.copyResize(image, width: inputSize, height: inputSize);
+    // Determine model input size from interpreter if possible
+    int inputHeight = 640;
+    int inputWidth = 640;
+    try {
+      final inShape = _interpreter.getInputTensor(0).shape; // e.g. [1, H, W, 3]
+      if (inShape.length >= 3) {
+        inputHeight = inShape[inShape.length - 3];
+        inputWidth = inShape[inShape.length - 2];
+      }
+    } catch (_) {
+      // keep defaults
+    }
 
-    // Prepare input buffer (float32) RGB normalized to 0..1
-    final input = Float32List(inputSize * inputSize * 3);
+    final resized = img.copyResize(image, width: inputWidth, height: inputHeight);
+
+    // Prepare input (float32 NHWC normalized 0..1)
+    final input = Float32List(inputWidth * inputHeight * 3);
     int idx = 0;
-    for (int y = 0; y < inputSize; y++) {
-      for (int x = 0; x < inputSize; x++) {
+    for (int y = 0; y < inputHeight; y++) {
+      for (int x = 0; x < inputWidth; x++) {
         final pixel = resized.getPixel(x, y);
         input[idx++] = img.getRed(pixel) / 255.0;
         input[idx++] = img.getGreen(pixel) / 255.0;
@@ -61,112 +68,113 @@ class TfliteDetectionService {
       }
     }
 
-    // Prepare output buffers for SSD Mobilenet-like models: locations, classes, scores, num
-    // EfficientDet produces up to 100 detections
-    final outputLocations =
-        List.generate(1, (_) => List.generate(100, (_) => List.filled(4, 0.0)));
-    final outputClasses = List.generate(1, (_) => List.filled(100, 0.0));
-    final outputScores = List.generate(1, (_) => List.filled(100, 0.0));
-    final numDetections = List.filled(1, 0.0);
-
-  Future<List<DetectedItem>> detect(File imageFile) async {
-    if (!_isInitialized) await initialize();
-
-    final bytes = await imageFile.readAsBytes();
-    final image = img.decodeImage(bytes)!;
-
-    // First try: EfficientDet-Lite3 config (384x384 float input)
+    // Prepare output buffer according to model's output shape
+    List<int> outShape;
     try {
-      final res = await _detectWithConfig(image, inputSize: 384, isFloat: true, maxResults: 100);
-      if (res.isNotEmpty) return res;
+      outShape = _interpreter.getOutputTensor(0).shape;
     } catch (e) {
-      print('Primary detect attempt failed: $e');
+      print('Unable to read output tensor shape: $e');
+      // fallback to common YOLOv5/8 shape for 640: [1,25200,85]
+      outShape = [1, 25200, _labels.length + 5];
     }
 
-    // Fallback: SSD-MobileNet config (300x300 uint8 input, up to 10 results)
+    int numBoxes = 0;
+    int numAttrs = 0;
+    if (outShape.length >= 3) {
+      numBoxes = outShape[1];
+      numAttrs = outShape[2];
+    } else if (outShape.length == 2) {
+      numAttrs = _labels.length + 5;
+      numBoxes = (outShape[1] / numAttrs).floor();
+    } else {
+      // unexpected shape
+      numBoxes = 25200;
+      numAttrs = _labels.length + 5;
+    }
+
+    final outputs = List.generate(1, (_) => List.generate(numBoxes, (_) => List.filled(numAttrs, 0.0)));
+
+    final outputMap = <int, Object>{0: outputs};
+
     try {
-      final res = await _detectWithConfig(image, inputSize: 300, isFloat: false, maxResults: 10);
-      return res;
+      _interpreter.runForMultipleInputs([input], outputMap);
     } catch (e) {
-      print('Fallback detect attempt failed: $e');
+      print('Interpreter run error: $e');
       return [];
     }
+
+    final rawOut = outputs[0];
+    final detections = <DetectedItem>[];
+
+    for (int i = 0; i < numBoxes; i++) {
+      final attrs = rawOut[i];
+      if (attrs.length < 5) continue;
+      final cx = attrs[0];
+      final cy = attrs[1];
+      final w = attrs[2];
+      final h = attrs[3];
+      final objectness = attrs[4];
+
+      // class scores follow
+      double bestScore = 0.0;
+      int bestClass = 0;
+      for (int c = 5; c < attrs.length; c++) {
+        if (attrs[c] > bestScore) {
+          bestScore = attrs[c];
+          bestClass = c - 5;
+        }
+      }
+
+      final score = objectness * bestScore;
+      if (score < confidenceThreshold) continue;
+
+      // coords are expected normalized (0..1) center x,y,w,h. If not, results will be wrong — user should convert model accordingly.
+      final xmin = max(0.0, cx - w / 2);
+      final ymin = max(0.0, cy - h / 2);
+      final xmax = min(1.0, cx + w / 2);
+      final ymax = min(1.0, cy + h / 2);
+
+      final rect = Rect.fromLTRB(xmin, ymin, xmax, ymax);
+      final label = (bestClass >= 0 && bestClass < _labels.length) ? _labels[bestClass] : 'class_$bestClass';
+
+      detections.add(DetectedItem(label: label, confidence: score, bbox: rect));
+    }
+
+    // Apply class-wise NMS
+    final results = _nonMaxSuppressionByClass(detections, iouThreshold);
+    return results;
   }
 
-  Future<List<DetectedItem>> _detectWithConfig(img.Image image, {required int inputSize, required bool isFloat, required int maxResults}) async {
-    final resized = img.copyResize(image, width: inputSize, height: inputSize);
+  List<DetectedItem> _nonMaxSuppressionByClass(List<DetectedItem> items, double iouThresh) {
+    final byClass = <String, List<DetectedItem>>{};
+    for (final it in items) {
+      byClass.putIfAbsent(it.label, () => []).add(it);
+    }
 
-    // Prepare input buffer
-    Object input;
-    if (isFloat) {
-      final buffer = Float32List(inputSize * inputSize * 3);
-      int idx = 0;
-      for (int y = 0; y < inputSize; y++) {
-        for (int x = 0; x < inputSize; x++) {
-          final pixel = resized.getPixel(x, y);
-          buffer[idx++] = img.getRed(pixel) / 255.0;
-          buffer[idx++] = img.getGreen(pixel) / 255.0;
-          buffer[idx++] = img.getBlue(pixel) / 255.0;
-        }
+    final kept = <DetectedItem>[];
+    for (final entry in byClass.entries) {
+      final list = entry.value;
+      list.sort((a, b) => b.confidence.compareTo(a.confidence));
+      while (list.isNotEmpty) {
+        final best = list.removeAt(0);
+        kept.add(best);
+        list.removeWhere((other) => _iou(best.bbox, other.bbox) > iouThresh);
       }
-      input = buffer;
-    } else {
-      final buffer = Uint8List(inputSize * inputSize * 3);
-      int idx = 0;
-      for (int y = 0; y < inputSize; y++) {
-        for (int x = 0; x < inputSize; x++) {
-          final pixel = resized.getPixel(x, y);
-          buffer[idx++] = img.getRed(pixel);
-          buffer[idx++] = img.getGreen(pixel);
-          buffer[idx++] = img.getBlue(pixel);
-        }
-      }
-      input = buffer;
     }
+    return kept;
+  }
 
-    // Prepare outputs
-    final outputLocations = List.generate(1, (_) => List.generate(maxResults, (_) => List.filled(4, 0.0)));
-    final outputClasses = List.generate(1, (_) => List.filled(maxResults, 0.0));
-    final outputScores = List.generate(1, (_) => List.filled(maxResults, 0.0));
-    final numDetections = List.filled(1, 0.0);
-
-    final outputs = <int, Object>{
-      0: outputLocations,
-      1: outputClasses,
-      2: outputScores,
-      3: numDetections,
-    };
-
-    // Run interpreter
-    try {
-      _interpreter.runForMultipleInputs([input], outputs);
-    } catch (e) {
-      print('Interpreter run error for config (size=$inputSize,isFloat=$isFloat): $e');
-      return [];
-    }
-
-    final detCount = numDetections[0].toInt();
-    final rawResults = <DetectedItem>[];
-
-    for (int i = 0; i < detCount && i < maxResults; i++) {
-      final score = outputScores[0][i];
-      if (score < confidenceThreshold) continue;
-      final classId = outputClasses[0][i].toInt();
-      final labelIndex = classId > 0 ? classId - 1 : classId;
-      final label = (labelIndex >= 0 && labelIndex < _labels.length) ? _labels[labelIndex] : 'unknown';
-      final bbox = outputLocations[0][i]; // [ymin, xmin, ymax, xmax]
-
-      // Convert to normalized rect coordinates (0..1)
-      final ymin = bbox[0];
-      final xmin = bbox[1];
-      final ymax = bbox[2];
-      final xmax = bbox[3];
-      final rect = Rect.fromLTRB(xmin, ymin, xmax, ymax);
-
-      rawResults.add(DetectedItem(label: label, confidence: score, bbox: rect));
-    }
-
-    // Apply NMS
-    final results = _nonMaxSuppression(rawResults, iouThreshold);
-    return results;
+  double _iou(Rect a, Rect b) {
+    final interLeft = max(a.left, b.left);
+    final interTop = max(a.top, b.top);
+    final interRight = min(a.right, b.right);
+    final interBottom = min(a.bottom, b.bottom);
+    final interW = max(0.0, interRight - interLeft);
+    final interH = max(0.0, interBottom - interTop);
+    final interArea = interW * interH;
+    final areaA = (a.width) * (a.height);
+    final areaB = (b.width) * (b.height);
+    final union = areaA + areaB - interArea;
+    if (union <= 0) return 0.0;
+    return interArea / union;
   }
