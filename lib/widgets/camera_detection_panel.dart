@@ -73,7 +73,11 @@ class _CameraDetectionPanelState extends State<CameraDetectionPanel> {
   // For temporal smoothing: track consecutive appearances
   final Map<String, int> _stabilityCounts = {};
   int _stabilityRequired = 2;
-  double _confidenceThreshold = 0.3;
+  double _confidenceThreshold = 0.1;
+  bool _showTopOnly = true;
+  double _iouThreshold = 0.45;
+  bool _applySigmoid = false;
+  bool _applySoftmax = false;
 
   @override
   void initState() {
@@ -86,6 +90,11 @@ class _CameraDetectionPanelState extends State<CameraDetectionPanel> {
   Future<void> _initializeDetectionService() async {
     try {
       await _detectionService.initialize();
+      // sync UI defaults to service
+      _detectionService.confidenceThreshold = _confidenceThreshold;
+      _detectionService.iouThreshold = _iouThreshold;
+      _detectionService.applySigmoid = _applySigmoid;
+      _detectionService.applySoftmax = _applySoftmax;
       print('Detection service initialized');
     } catch (e) {
       print('Failed to initialize detection service: $e');
@@ -219,6 +228,11 @@ class _CameraDetectionPanelState extends State<CameraDetectionPanel> {
 
   @override
   Widget build(BuildContext context) {
+    // Prepare sorted display list outside of widget tree
+    final displayList = List<DetectedItem>.from(_detectedObjects);
+    displayList.sort((a, b) => b.confidence.compareTo(a.confidence));
+    final shown = _showTopOnly ? displayList.take(10).toList() : displayList;
+
     return Card(
       color: AppConstants.colorCard,
       child: Padding(
@@ -314,8 +328,9 @@ class _CameraDetectionPanelState extends State<CameraDetectionPanel> {
                       ),
                     ),
                     const SizedBox(height: 8),
-                    ...List.generate(_detectedObjects.length, (i) {
-                      final obj = _detectedObjects[i];
+                    // Optionally show only top-N by confidence
+                    ...List.generate(shown.length, (i) {
+                      final obj = shown[i];
                       var label = obj.label.isNotEmpty ? obj.label : 'Unknown';
                       // Clean label - only take first word
                       label = label.trim().toLowerCase().split(' ').first;
@@ -361,8 +376,71 @@ class _CameraDetectionPanelState extends State<CameraDetectionPanel> {
                 ),
               ),
             const SizedBox(height: 16),
+            // Toggle to show top results only
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Show top 10 only'),
+                Switch(
+                  value: _showTopOnly,
+                  onChanged: (v) {
+                    setState(() => _showTopOnly = v);
+                  },
+                ),
+              ],
+            ),
             // Camera Control Button
             const SizedBox(height: 8),
+            Row(
+              children: [
+                const Text('IOU:'),
+                Expanded(
+                  child: Slider(
+                    value: _iouThreshold,
+                    min: 0.1,
+                    max: 0.9,
+                    divisions: 16,
+                    label: '${(_iouThreshold).toStringAsFixed(2)}',
+                    onChanged: (v) {
+                      setState(() {
+                        _iouThreshold = v;
+                        _detectionService.iouThreshold = v;
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Apply sigmoid to outputs'),
+                Switch(
+                  value: _applySigmoid,
+                  onChanged: (v) {
+                    setState(() {
+                      _applySigmoid = v;
+                      _detectionService.applySigmoid = v;
+                    });
+                  },
+                ),
+              ],
+            ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text('Apply softmax to class scores'),
+                Switch(
+                  value: _applySoftmax,
+                  onChanged: (v) {
+                    setState(() {
+                      _applySoftmax = v;
+                      _detectionService.applySoftmax = v;
+                    });
+                  },
+                ),
+              ],
+            ),
             Row(
               children: [
                 const Text('Confidence:'),

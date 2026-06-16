@@ -12,8 +12,10 @@ class TfliteDetectionService {
   late Interpreter _interpreter;
   List<String> _labels = [];
   bool _isInitialized = false;
-  double confidenceThreshold = 0.25;
+  double confidenceThreshold = 0.10;
   double iouThreshold = 0.45;
+  bool applySigmoid = false;
+  bool applySoftmax = false;
 
   Future<void> initialize() async {
     if (_isInitialized) return;
@@ -278,6 +280,30 @@ class TfliteDetectionService {
         print('Sample output attr range (first $sampleBoxes boxes): min=$minVal max=$maxVal');
       }
     } catch (_) {}
+    // Optionally apply activations if model outputs logits
+    if (applySigmoid || applySoftmax) {
+      for (int i = 0; i < rawOut.length; i++) {
+        final attrs = rawOut[i];
+        int classStart = hasObjectness ? 5 : 4;
+        // Apply sigmoid to objectness and bbox coords if requested
+        if (applySigmoid && attrs.length > 4) {
+          // apply sigmoid to objectness
+          attrs[4] = _sigmoid(attrs[4]);
+        }
+        // Apply sigmoid to class logits if requested (before softmax)
+        if (applySigmoid) {
+          for (int c = classStart; c < attrs.length; c++) {
+            attrs[c] = _sigmoid(attrs[c]);
+          }
+        }
+        // Optionally apply softmax across class logits
+        if (applySoftmax) {
+          final scores = attrs.sublist(classStart);
+          final soft = _softmax(scores);
+          for (int c = 0; c < soft.length; c++) attrs[classStart + c] = soft[c];
+        }
+      }
+    }
     final detections = <DetectedItem>[];
 
 
@@ -354,6 +380,17 @@ class TfliteDetectionService {
     final union = areaA + areaB - interArea;
     if (union <= 0) return 0.0;
     return interArea / union;
+  }
+
+  double _sigmoid(double x) => 1.0 / (1.0 + exp(-x));
+
+  List<double> _softmax(List<double> vals) {
+    if (vals.isEmpty) return vals;
+    final maxV = vals.reduce(max);
+    final exps = vals.map((v) => exp(v - maxV)).toList();
+    final sum = exps.reduce((a, b) => a + b);
+    if (sum == 0) return List.filled(vals.length, 0.0);
+    return exps.map((e) => e / sum).toList();
   }
 
   /// Release interpreter resources
