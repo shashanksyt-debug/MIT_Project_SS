@@ -16,6 +16,7 @@ import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../models/distance_reading.dart';
+import '../models/vibration_reading.dart';
 
 // Connection state enum exposed to the UI layer.
 enum BtConnectionState {
@@ -33,6 +34,7 @@ class BluetoothService extends ChangeNotifier {
   List<BluetoothDevice> pairedDevices = [];
   BluetoothDevice? connectedDevice;
   DistanceReading? lastReading;
+  VibrationReading? lastVibration;
   String errorMessage = '';
 
   // ── Private internals ─────────────────────────────────────────
@@ -40,9 +42,12 @@ class BluetoothService extends ChangeNotifier {
   StreamSubscription? _dataSubscription;
   final StreamController<DistanceReading> _readingController =
       StreamController<DistanceReading>.broadcast();
+    final StreamController<VibrationReading> _vibrationController =
+      StreamController<VibrationReading>.broadcast();
 
   /// Stream of parsed DistanceReading objects — subscribe in your UI.
   Stream<DistanceReading> get readingStream => _readingController.stream;
+  Stream<VibrationReading> get vibrationStream => _vibrationController.stream;
 
   // Accumulates partial bytes between BT packets
   String _buffer = '';
@@ -224,19 +229,87 @@ class BluetoothService extends ChangeNotifier {
   }
 
   void _processLine(String line) {
-    final reading = DistanceReading.fromPacket(line);
+    final trimmed = line.trim();
 
-    // Only update lastReading if it's a valid value
-    // If it's an error, keep the previous good reading but still emit
-    // the event so the timestamp updates
-    if (!reading.isError) {
-      lastReading = reading;
-    }
+    // Handle vibration messages from Arduino
+    try {
+      // Accept both "Current Spike %:" and the new "Live Spike %:"
+      if (trimmed.startsWith('Current Spike %:') || trimmed.startsWith('Live Spike %:')) {
+        final parts = trimmed.split(':');
+        final pct = int.tryParse(parts.last.trim()) ?? 0;
+        final level = _vibrationLevelFor(pct);
+        final vr = VibrationReading(
+            spikePercent: pct,
+            level: level,
+            receivedAt: DateTime.now(),
+            rawPacket: line);
+        lastVibration = vr;
+        if (!_vibrationController.isClosed) _vibrationController.add(vr);
+        notifyListeners();
+        return;
+      }
 
-    if (!_readingController.isClosed) {
-      _readingController.add(reading);
+      // Direct Bluetooth alert lines like: "VIBR:SEVERE" or "VIBR:MODERATE"
+      if (trimmed.startsWith('VIBR:')) {
+        final parts = trimmed.split(':');
+        final tag = parts.length > 1 ? parts[1].trim().toUpperCase() : '';
+        VibrationLevel lvl = VibrationLevel.none;
+        if (tag == 'SEVERE') lvl = VibrationLevel.severe;
+        else if (tag == 'MODERATE') lvl = VibrationLevel.moderate;
+        else if (tag == 'MILD') lvl = VibrationLevel.mild;
+        final vr = VibrationReading(
+            spikePercent: 0,
+            level: lvl,
+            alertMessage: trimmed,
+            receivedAt: DateTime.now(),
+            rawPacket: line);
+        lastVibration = vr;
+        if (!_vibrationController.isClosed) _vibrationController.add(vr);
+        notifyListeners();
+        return;
+      }
+
+      // Also accept old "ALERT -> VIBR:..." lines
+      if (trimmed.contains('VIBR:') || trimmed.startsWith('>>> ALERT')) {
+        final msg = trimmed;
+        VibrationLevel lvl = VibrationLevel.none;
+        if (msg.contains('SEVERE')) lvl = VibrationLevel.severe;
+        else if (msg.contains('MODERATE')) lvl = VibrationLevel.moderate;
+        else if (msg.contains('MILD')) lvl = VibrationLevel.mild;
+        final vr = VibrationReading(
+            spikePercent: 0,
+            level: lvl,
+            alertMessage: msg,
+            receivedAt: DateTime.now(),
+            rawPacket: line);
+        lastVibration = vr;
+        if (!_vibrationController.isClosed) _vibrationController.add(vr);
+        notifyListeners();
+        return;
+      }
+
+      // Otherwise treat as distance reading (existing behaviour)
+      final reading = DistanceReading.fromPacket(line);
+
+      if (!reading.isError) {
+        lastReading = reading;
+      }
+
+      if (!_readingController.isClosed) {
+        _readingController.add(reading);
+      }
+      notifyListeners();
+      return;
+    } catch (e) {
+      debugPrint('Failed to parse line: $e — "$line"');
     }
-    notifyListeners();
+  }
+
+  VibrationLevel _vibrationLevelFor(int pct) {
+    if (pct >= 90) return VibrationLevel.severe;
+    if (pct >= 75) return VibrationLevel.moderate;
+    if (pct >= 60) return VibrationLevel.mild;
+    return VibrationLevel.none;
   }
 
   void _onStreamError(Object error) {
@@ -273,6 +346,7 @@ class BluetoothService extends ChangeNotifier {
   void dispose() {
     disconnect(notify: false);
     _readingController.close();
+    _vibrationController.close();
     super.dispose();
   }
 }

@@ -1,6 +1,9 @@
 // lib/screens/home_screen.dart
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_bluetooth_serial/flutter_bluetooth_serial.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
@@ -8,6 +11,7 @@ import 'package:provider/provider.dart';
 import '../models/distance_reading.dart';
 import '../services/bluetooth_service.dart';
 import '../services/tts_service.dart';
+import '../models/vibration_reading.dart';
 import '../utils/constants.dart';
 import '../widgets/distance_gauge.dart';
 import '../widgets/status_bar.dart';
@@ -28,6 +32,11 @@ class _HomeScreenState extends State<HomeScreen> {
   //Added These
   BtConnectionState _previousBtState = BtConnectionState.idle;
   bool _hasSpokenConnected = false;
+  // Vibration stream subscription
+  StreamSubscription? _vibrationSub;
+  VibrationReading? _lastVibration;
+  DateTime? _lastVibrationAlertAt;
+  static const int _vibrationCooldownMs = 5000;
 
   @override
   void initState() {
@@ -35,6 +44,51 @@ class _HomeScreenState extends State<HomeScreen> {
     _bootstrap();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       context.read<BluetoothService>().addListener(_onBtStateChange);
+      // subscribe to vibration stream
+      _vibrationSub = context.read<BluetoothService>().vibrationStream.listen((v) {
+        setState(() => _lastVibration = v);
+        final tts = context.read<TtsService>();
+
+        // Enforce an app-side cooldown to avoid repeated alerts (matches Arduino cooldown)
+        final now = DateTime.now();
+        if (_lastVibrationAlertAt != null &&
+            now.difference(_lastVibrationAlertAt!).inMilliseconds < _vibrationCooldownMs) {
+          // still in cooldown window — ignore active alert
+          return;
+        }
+
+        String? message;
+        try {
+          switch (v.level) {
+            case VibrationLevel.severe:
+              message = 'Danger ahead';
+              HapticFeedback.heavyImpact();
+              break;
+            case VibrationLevel.moderate:
+              message = 'Warning, bumpy path ahead';
+              HapticFeedback.mediumImpact();
+              break;
+            case VibrationLevel.mild:
+              message = 'Be aware: slight bumps ahead';
+              HapticFeedback.lightImpact();
+              break;
+            default:
+              message = null;
+          }
+        } catch (_) {
+          try {
+            HapticFeedback.vibrate();
+          } catch (_) {}
+        }
+
+        if (message != null) {
+          tts.speakEvent(message);
+          _lastVibrationAlertAt = DateTime.now();
+        } else if (v.alertMessage != null && v.alertMessage!.isNotEmpty) {
+          tts.speakEvent(v.alertMessage!);
+          _lastVibrationAlertAt = DateTime.now();
+        }
+      });
     });
   }
 
@@ -63,6 +117,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     context.read<BluetoothService>().removeListener(_onBtStateChange);
+    _vibrationSub?.cancel();
     super.dispose();
   }
 
@@ -257,6 +312,43 @@ class _HomeScreenState extends State<HomeScreen> {
                         distanceCm: dist ?? 0,
                         thresholdCm: _thresholdCm,
                       ),
+                      const SizedBox(height: 8),
+                      // Vibration indicator
+                      if (_lastVibration != null)
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: _lastVibration!.level == VibrationLevel.severe
+                                ? AppConstants.colorDanger.withOpacity(0.1)
+                                : _lastVibration!.level == VibrationLevel.moderate
+                                    ? AppConstants.colorWarning.withOpacity(0.08)
+                                    : AppConstants.colorCard,
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: AppConstants.colorBorder),
+                          ),
+                          child: Row(
+                            children: [
+                              Icon(
+                                _lastVibration!.level == VibrationLevel.severe
+                                    ? Icons.dangerous
+                                    : Icons.vibration,
+                                color: _lastVibration!.level == VibrationLevel.severe
+                                    ? AppConstants.colorDanger
+                                    : AppConstants.colorAccent,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _lastVibration!.alertMessage ??
+                                      'Vibration ${_lastVibration!.spikePercent}% — ${_lastVibration!.level.toString().split('.').last.toUpperCase()}',
+                                  style: const TextStyle(
+                                      color: AppConstants.colorTextPrimary),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
                       const SizedBox(height: 8),
                       _InfoCardRow(
                         thresholdCm: _thresholdCm,
